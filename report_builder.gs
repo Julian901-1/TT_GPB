@@ -28,7 +28,7 @@ const CONFIG = {
     'Тематические сайты': ['Avito', 'Авто.ру', 'Коммерсант', 'РБК'],
     'Баннерная реклама': ['Яндекс Медийные баннеры', 'Яндекс.Медийные баннеры'],
     'Социальные сети': ['VK Ads'],
-    'Фин. агрегаторы': ['Sravni.ru', 'Bankiros', 'VBR']
+    'Фин. агрегаторы': ['Sravni.ru', 'Bankiros', 'VBR', 'Sravni', 'Vbr']
   }
 };
 
@@ -39,15 +39,14 @@ function buildReport() {
     
     // 1. Получаем данные из MP_STATUS
     const mpData = getMPStatusData();
-    console.log('Данные из MP_STATUS получены:', mpData);
+    console.log('Данные из MP_STATUS получены:', mpData.length, 'размещений');
     
     // 2. Находим подходящие вкладки в REPORT_TT_BUILDER
     const matchingSheets = findMatchingSheets(mpData);
-    console.log('Найденные вкладки:', matchingSheets.map(m => ({
-      originalName: m.originalName,
-      newName: m.newName,
-      platform: m.placement.platform
-    })));
+    console.log('Найдено вкладок:', matchingSheets.length);
+    for (const match of matchingSheets) {
+      console.log(`- ${match.originalName} -> ${match.newName}`);
+    }
     
     // 3. Создаем копию REPORT_TT_BUILDER
     const newSpreadsheet = createReportCopy(matchingSheets);
@@ -103,7 +102,14 @@ function findMatchingSheets(mpData) {
   const allSheets = spreadsheet.getSheets();
   const matchingSheets = [];
   
+  console.log('Все доступные листы в REPORT_TT_BUILDER:');
+  for (const sheet of allSheets) {
+    console.log(`- "${sheet.getName()}"`);
+  }
+  
   for (const placement of mpData) {
+    console.log(`Ищем лист для: ${placement.platform} (${placement.format})`);
+    
     const targetNames = [
       `${placement.platform} (${placement.format})`,
       placement.platform
@@ -117,20 +123,26 @@ function findMatchingSheets(mpData) {
       
       for (const targetName of targetNames) {
         const score = calculateSimilarity(sheetName, targetName);
-        if (score > bestScore && score > 0.7) {
+        if (score > bestScore && score > 0.6) { // Понизил порог с 0.7 до 0.6
           bestScore = score;
           bestMatch = {
             sheet: sheet,
             originalName: sheetName,
             newName: placement.platform,
-            placement: placement
+            placement: placement,
+            score: score
           };
         }
       }
     }
     
-    if (bestMatch && !matchingSheets.find(m => m.originalName === bestMatch.originalName)) {
-      matchingSheets.push(bestMatch);
+    if (bestMatch) {
+      console.log(`Найден лист: "${bestMatch.originalName}" (схожесть: ${bestMatch.score.toFixed(2)})`);
+      if (!matchingSheets.find(m => m.originalName === bestMatch.originalName)) {
+        matchingSheets.push(bestMatch);
+      }
+    } else {
+      console.log(`Лист не найден для: ${placement.platform}`);
     }
   }
   
@@ -192,7 +204,7 @@ function createReportCopy(matchingSheets) {
   const sheetsToKeep = new Set();
   const sheetsToRename = new Map();
   
-  console.log('Все листы в копии:', allSheets.map(s => s.getName()));
+  console.log('Создание копии. Всего листов:', allSheets.length);
   
   // Добавляем общие листы
   for (const commonSheetName of CONFIG.COMMON_SHEETS) {
@@ -202,7 +214,9 @@ function createReportCopy(matchingSheets) {
       if (commonSheetName === 'ПРОДУКТ') {
         sheetsToRename.set(sheet.getName(), CONFIG.TARGET_PRODUCT);
       }
-      console.log('Оставляем общий лист:', sheet.getName());
+      console.log('Сохраняем общий лист:', sheet.getName());
+    } else {
+      console.log('Общий лист не найден:', commonSheetName);
     }
   }
   
@@ -212,12 +226,17 @@ function createReportCopy(matchingSheets) {
     if (sheet) {
       sheetsToKeep.add(sheet.getName());
       sheetsToRename.set(sheet.getName(), matchInfo.newName);
-      console.log('Оставляем найденный лист:', sheet.getName(), '-> будет переименован в:', matchInfo.newName);
+      console.log('Сохраняем найденный лист:', sheet.getName());
     }
   }
   
-  console.log('Листы к сохранению:', Array.from(sheetsToKeep));
-  console.log('Листы к переименованию:', Array.from(sheetsToRename.entries()));
+  console.log('Листы к сохранению:', sheetsToKeep.size);
+  console.log('Всего листов в копии:', allSheets.length);
+  
+  // Проверяем, что у нас есть листы для сохранения
+  if (sheetsToKeep.size === 0) {
+    throw new Error('Не найдено ни одного листа для сохранения! Проверьте названия общих листов.');
+  }
   
   // Удаляем ненужные листы (но не все!)
   const sheetsToDelete = [];
@@ -227,11 +246,11 @@ function createReportCopy(matchingSheets) {
     }
   }
   
-  console.log('Листы к удалению:', sheetsToDelete.map(s => s.getName()));
+  console.log('Листы к удалению:', sheetsToDelete.length);
   
   // Проверяем, что мы не удаляем все листы
   if (sheetsToDelete.length >= allSheets.length) {
-    throw new Error('Попытка удалить все листы! Проверьте логику поиска листов.');
+    throw new Error('Попытка удалить все листы! Найдено листов для сохранения: ' + sheetsToKeep.size);
   }
   
   // Удаляем ненужные листы
@@ -240,7 +259,7 @@ function createReportCopy(matchingSheets) {
       console.log('Удаляем лист:', sheet.getName());
       newSpreadsheet.deleteSheet(sheet);
     } catch (error) {
-      console.error('Ошибка при удалении листа', sheet.getName(), ':', error);
+      console.error('Ошибка при удалении листа', sheet.getName(), ':', error.message);
     }
   }
   
@@ -249,7 +268,11 @@ function createReportCopy(matchingSheets) {
     const sheet = newSpreadsheet.getSheetByName(oldName);
     if (sheet && oldName !== newName) {
       console.log('Переименовываем лист:', oldName, '->', newName);
-      sheet.setName(newName);
+      try {
+        sheet.setName(newName);
+      } catch (error) {
+        console.error('Ошибка переименования:', error.message);
+      }
     }
   }
   
@@ -456,6 +479,24 @@ function generateHyperlink(spreadsheet, platformName) {
     return `=ГИПЕРССЫЛКА("#gid=${gid}";"${platformName}")`;
   }
   return platformName;
+}
+
+// ================== ОТЛАДОЧНАЯ ФУНКЦИЯ ==================
+function debugSheetNames() {
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.REPORT_TT_BUILDER_ID);
+  const allSheets = spreadsheet.getSheets();
+  
+  console.log('=== ОТЛАДКА: Все листы в REPORT_TT_BUILDER ===');
+  for (let i = 0; i < allSheets.length; i++) {
+    const sheet = allSheets[i];
+    console.log(`${i + 1}. "${sheet.getName()}"`);
+  }
+  
+  console.log('\n=== ОТЛАДКА: Проверка общих листов ===');
+  for (const commonSheetName of CONFIG.COMMON_SHEETS) {
+    const sheet = spreadsheet.getSheetByName(commonSheetName);
+    console.log(`"${commonSheetName}": ${sheet ? 'НАЙДЕН' : 'НЕ НАЙДЕН'}`);
+  }
 }
 
 // ================== ФУНКЦИЯ ДЛЯ ТЕСТИРОВАНИЯ ==================
