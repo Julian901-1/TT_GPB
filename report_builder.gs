@@ -43,7 +43,11 @@ function buildReport() {
     
     // 2. Находим подходящие вкладки в REPORT_TT_BUILDER
     const matchingSheets = findMatchingSheets(mpData);
-    console.log('Найденные вкладки:', matchingSheets);
+    console.log('Найденные вкладки:', matchingSheets.map(m => ({
+      originalName: m.originalName,
+      newName: m.newName,
+      platform: m.placement.platform
+    })));
     
     // 3. Создаем копию REPORT_TT_BUILDER
     const newSpreadsheet = createReportCopy(matchingSheets);
@@ -125,7 +129,7 @@ function findMatchingSheets(mpData) {
       }
     }
     
-    if (bestMatch && !matchingSheets.find(m => m.sheet.getName() === bestMatch.sheet.getName())) {
+    if (bestMatch && !matchingSheets.find(m => m.originalName === bestMatch.originalName)) {
       matchingSheets.push(bestMatch);
     }
   }
@@ -185,32 +189,67 @@ function createReportCopy(matchingSheets) {
   
   // Получаем все листы новой таблицы
   const allSheets = newSpreadsheet.getSheets();
-  const sheetsToKeep = [];
+  const sheetsToKeep = new Set();
+  const sheetsToRename = new Map();
+  
+  console.log('Все листы в копии:', allSheets.map(s => s.getName()));
   
   // Добавляем общие листы
   for (const commonSheetName of CONFIG.COMMON_SHEETS) {
     const sheet = newSpreadsheet.getSheetByName(commonSheetName);
     if (sheet) {
+      sheetsToKeep.add(sheet.getName());
       if (commonSheetName === 'ПРОДУКТ') {
-        sheet.setName(CONFIG.TARGET_PRODUCT);
+        sheetsToRename.set(sheet.getName(), CONFIG.TARGET_PRODUCT);
       }
-      sheetsToKeep.push(sheet);
+      console.log('Оставляем общий лист:', sheet.getName());
     }
   }
   
-  // Добавляем найденные листы и переименовываем их
+  // Добавляем найденные листы
   for (const matchInfo of matchingSheets) {
     const sheet = newSpreadsheet.getSheetByName(matchInfo.originalName);
     if (sheet) {
-      sheet.setName(matchInfo.newName);
-      sheetsToKeep.push(sheet);
+      sheetsToKeep.add(sheet.getName());
+      sheetsToRename.set(sheet.getName(), matchInfo.newName);
+      console.log('Оставляем найденный лист:', sheet.getName(), '-> будет переименован в:', matchInfo.newName);
     }
   }
   
-  // Удаляем ненужные листы
+  console.log('Листы к сохранению:', Array.from(sheetsToKeep));
+  console.log('Листы к переименованию:', Array.from(sheetsToRename.entries()));
+  
+  // Удаляем ненужные листы (но не все!)
+  const sheetsToDelete = [];
   for (const sheet of allSheets) {
-    if (!sheetsToKeep.includes(sheet)) {
+    if (!sheetsToKeep.has(sheet.getName())) {
+      sheetsToDelete.push(sheet);
+    }
+  }
+  
+  console.log('Листы к удалению:', sheetsToDelete.map(s => s.getName()));
+  
+  // Проверяем, что мы не удаляем все листы
+  if (sheetsToDelete.length >= allSheets.length) {
+    throw new Error('Попытка удалить все листы! Проверьте логику поиска листов.');
+  }
+  
+  // Удаляем ненужные листы
+  for (const sheet of sheetsToDelete) {
+    try {
+      console.log('Удаляем лист:', sheet.getName());
       newSpreadsheet.deleteSheet(sheet);
+    } catch (error) {
+      console.error('Ошибка при удалении листа', sheet.getName(), ':', error);
+    }
+  }
+  
+  // Переименовываем листы
+  for (const [oldName, newName] of sheetsToRename.entries()) {
+    const sheet = newSpreadsheet.getSheetByName(oldName);
+    if (sheet && oldName !== newName) {
+      console.log('Переименовываем лист:', oldName, '->', newName);
+      sheet.setName(newName);
     }
   }
   
@@ -232,11 +271,14 @@ function updateProductSheet(newSpreadsheet, mpData) {
   
   // Группируем размещения по блокам
   const groupedPlacements = groupPlacementsByBlocks(mpData);
+  console.log('Группировка по блокам:', Object.keys(groupedPlacements));
   
   let currentRow = 3;
   let placementNumber = 1;
   
   for (const [blockName, placements] of Object.entries(groupedPlacements)) {
+    console.log(`Обрабатываем блок: ${blockName}, размещений: ${placements.length}`);
+    
     // Добавляем заголовок блока
     productSheet.getRange(currentRow, 1).setValue(blockName);
     currentRow++;
@@ -246,6 +288,8 @@ function updateProductSheet(newSpreadsheet, mpData) {
       const mpStatusData = getMPStatusPlacementData(placement);
       const comment = generateComment(placement);
       const hyperlink = generateHyperlink(newSpreadsheet, placement.platform);
+      
+      console.log(`Добавляем размещение: ${placement.platform}`);
       
       // A - номер размещения
       productSheet.getRange(currentRow, 1).setValue(placementNumber);
@@ -273,6 +317,8 @@ function updateProductSheet(newSpreadsheet, mpData) {
       currentRow++;
     }
   }
+  
+  console.log('Лист ПРОДУКТ обновлен успешно');
 }
 
 // ================== ГРУППИРОВКА ПО БЛОКАМ ==================
@@ -290,6 +336,7 @@ function groupPlacementsByBlocks(mpData) {
           }
           grouped[blockName].push(placement);
           blockFound = true;
+          console.log(`Размещение ${placement.platform} добавлено в блок ${blockName}`);
           break;
         }
       }
@@ -303,6 +350,7 @@ function groupPlacementsByBlocks(mpData) {
         grouped[newBlockName] = [];
       }
       grouped[newBlockName].push(placement);
+      console.log(`Размещение ${placement.platform} добавлено в блок ${newBlockName}`);
     }
   }
   
